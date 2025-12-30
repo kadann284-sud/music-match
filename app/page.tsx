@@ -20,9 +20,9 @@ function getRank(points: number) {
 // 評価→ポイント変換
 function ratingToPoint(rating: 'A'|'B'|'C') {
   switch (rating) {
-    case 'A': return 3; // よく知ってる
-    case 'B': return 2; // 聞いたことある
-    case 'C': return 1; // 名前だけ知ってる／うろ覚え
+    case 'A': return 3;
+    case 'B': return 2;
+    case 'C': return 1;
   }
 }
 
@@ -37,16 +37,21 @@ export default function HomePage() {
   const [songName, setSongName] = useState('');
   const [artistName, setArtistName] = useState('');
   const [rating, setRating] = useState<'A'|'B'|'C'>('A');
+  const [userId, setUserId] = useState<string | null>(null);
 
-  const userId = localStorage.getItem('userId');
-
-  // ログインチェック・ユーザー取得
+  // localStorage はクライアントでのみ取得
   useEffect(() => {
-    if (!userId) {
+    const id = localStorage.getItem('userId');
+    if (!id) {
       router.push('/login');
       return;
     }
+    setUserId(id);
+  }, [router]);
 
+  // Firestore からユーザー情報取得
+  useEffect(() => {
+    if (!userId) return;
     const unsub = onSnapshot(doc(db, 'users', userId), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
@@ -54,9 +59,8 @@ export default function HomePage() {
         setSongs(data.songs || []);
       }
     });
-
     return () => unsub();
-  }, [userId, router]);
+  }, [userId]);
 
   async function addSong() {
     if (!currentUser || !songName || !artistName) return;
@@ -83,7 +87,6 @@ export default function HomePage() {
     router.push(`/room/${crypto.randomUUID()}`);
   }
 
-  // 総ポイント計算
   const totalPoints = songs.reduce((sum, s) => sum + ratingToPoint(s.rating), 0);
   const rank = getRank(totalPoints);
 
@@ -98,12 +101,10 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* 総ポイントとランク */}
       <div className="bg-white p-3 rounded-lg shadow text-center text-gray-900">
         総ポイント: <span className="font-bold text-purple-700">{totalPoints}</span> | ランク: <span className="font-bold text-yellow-600">{rank}</span>
       </div>
 
-      {/* 曲追加フォーム */}
       <div className="flex flex-col md:flex-row gap-2">
         <input
           className="flex-1 p-2 rounded-lg border text-gray-900"
@@ -134,7 +135,6 @@ export default function HomePage() {
         </button>
       </div>
 
-      {/* 曲リスト */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
         <h2 className="font-semibold text-gray-900">🎶 登録曲一覧</h2>
         <ul className="flex flex-col gap-1">
@@ -158,7 +158,6 @@ export default function HomePage() {
         </ul>
       </div>
 
-      {/* ルーム作成ボタン */}
       <button
         onClick={goToRoom}
         className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition"
