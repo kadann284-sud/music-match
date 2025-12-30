@@ -1,170 +1,141 @@
-"use client";
+"use client"; // クライアントサイド専用にする
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { db } from '@/lib/firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { useEffect, useState } from "react";
 
-type Song = { name: string; artist: string; key: string; rating: 'A' | 'B' | 'C' };
-type User = { id: string; name: string; songs: Song[] };
-
-// ランク判定
-function getRank(points: number) {
-  if (points >= 1000) return '💎 ダイヤ';
-  if (points >= 301) return '🏆 プラチナ';
-  if (points >= 101) return '🥇 ゴールド';
-  if (points >= 51) return '🥈 シルバー';
-  return '🥉 ブロンズ';
+interface Song {
+  name: string;
+  artist: string;
+  rank: "A" | "B" | "C"; // 3段階評価
 }
 
-// 評価→ポイント変換
-function ratingToPoint(rating: 'A'|'B'|'C') {
-  switch (rating) {
-    case 'A': return 3; // よく知ってる
-    case 'B': return 2; // 聞いたことある
-    case 'C': return 1; // 名前だけ知ってる／うろ覚え
-  }
-}
-
-function normalizeSong(name: string, artist: string) {
-  return (name + '_' + artist).toLowerCase().normalize('NFKC').replace(/[\s\p{Punctuation}]/gu, '');
-}
-
-export default function HomePage() {
-  const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+export default function Home() {
   const [songs, setSongs] = useState<Song[]>([]);
-  const [songName, setSongName] = useState('');
-  const [artistName, setArtistName] = useState('');
-  const [rating, setRating] = useState<'A'|'B'|'C'>('A');
+  const [songName, setSongName] = useState("");
+  const [artistName, setArtistName] = useState("");
+  const [rank, setRank] = useState<"A" | "B" | "C">("A");
 
-  const userId = localStorage.getItem('userId');
-
-  // ログインチェック・ユーザー取得
+  // localStorage から読み込む
   useEffect(() => {
-    if (!userId) {
-      router.push('/login');
+    const savedSongs = localStorage.getItem("songs");
+    if (savedSongs) setSongs(JSON.parse(savedSongs));
+  }, []);
+
+  // 曲を保存する関数
+  const addSong = () => {
+    if (!songName.trim()) return;
+
+    // 重複登録防止（曲名 + アーティスト）
+    if (
+      songs.some(
+        (s) =>
+          s.name.toLowerCase().trim() === songName.toLowerCase().trim() &&
+          s.artist.toLowerCase().trim() === artistName.toLowerCase().trim()
+      )
+    ) {
+      alert("すでに登録されています");
       return;
     }
 
-    const unsub = onSnapshot(doc(db, 'users', userId), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setCurrentUser({ id: snap.id, name: data.name, songs: data.songs || [] });
-        setSongs(data.songs || []);
-      }
-    });
+    const newSong: Song = { name: songName.trim(), artist: artistName.trim(), rank };
+    const updatedSongs = [...songs, newSong];
+    setSongs(updatedSongs);
+    localStorage.setItem("songs", JSON.stringify(updatedSongs));
+    setSongName("");
+    setArtistName("");
+    setRank("A");
+  };
 
-    return () => unsub();
-  }, [userId, router]);
+  // 曲を削除
+  const deleteSong = (index: number) => {
+    const updatedSongs = songs.filter((_, i) => i !== index);
+    setSongs(updatedSongs);
+    localStorage.setItem("songs", JSON.stringify(updatedSongs));
+  };
 
-  async function addSong() {
-    if (!currentUser || !songName || !artistName) return;
+  // ランクポイント計算
+  const getRankPoints = (s: Song) => {
+    switch (s.rank) {
+      case "A":
+        return 3;
+      case "B":
+        return 2;
+      case "C":
+        return 1;
+    }
+  };
 
-    const key = normalizeSong(songName, artistName);
-    if (songs.some((s) => s.key === key)) return;
+  const totalPoints = songs.reduce((acc, s) => acc + getRankPoints(s), 0);
 
-    const newSong: Song = { name: songName, artist: artistName, key, rating };
-    const updated = { ...currentUser, songs: [...songs, newSong] };
-    await setDoc(doc(db, 'users', currentUser.id), updated);
-
-    setSongName('');
-    setArtistName('');
-    setRating('A');
-  }
-
-  async function deleteSong(songKey: string) {
-    if (!currentUser) return;
-    const updated = { ...currentUser, songs: songs.filter((s) => s.key !== songKey) };
-    await setDoc(doc(db, 'users', currentUser.id), updated);
-  }
-
-  function goToRoom() {
-    router.push(`/room/${crypto.randomUUID()}`);
-  }
-
-  // 総ポイント計算
-  const totalPoints = songs.reduce((sum, s) => sum + ratingToPoint(s.rating), 0);
-  const rank = getRank(totalPoints);
+  const getUserRank = () => {
+    if (totalPoints >= 1000) return "ダイヤ";
+    if (totalPoints >= 301) return "プラチナ";
+    if (totalPoints >= 101) return "ゴールド";
+    if (totalPoints >= 51) return "シルバー";
+    return "ブロンズ";
+  };
 
   return (
-    <main className="min-h-screen p-4 bg-gray-100 flex flex-col gap-6">
-      <h1 className="text-2xl font-bold text-center text-gray-900">🎵 Music Match - ホーム</h1>
+    <div className="min-h-screen bg-gray-100 p-6">
+      <h1 className="text-3xl font-bold text-gray-800 mb-4">Music Match</h1>
 
-      {currentUser && (
-        <div className="bg-gray-200 p-3 rounded-lg text-gray-900 font-semibold text-center">
-          ユーザー名: <span className="text-blue-700">{currentUser.name}</span> |
-          UserID: <span className="text-green-700">{currentUser.id}</span>
-        </div>
-      )}
-
-      {/* 総ポイントとランク */}
-      <div className="bg-white p-3 rounded-lg shadow text-center text-gray-900">
-        総ポイント: <span className="font-bold text-purple-700">{totalPoints}</span> | ランク: <span className="font-bold text-yellow-600">{rank}</span>
-      </div>
-
-      {/* 曲追加フォーム */}
-      <div className="flex flex-col md:flex-row gap-2">
+      <div className="mb-6">
         <input
-          className="flex-1 p-2 rounded-lg border text-gray-900"
+          className="p-2 border rounded mr-2"
           placeholder="曲名"
           value={songName}
           onChange={(e) => setSongName(e.target.value)}
         />
         <input
-          className="flex-1 p-2 rounded-lg border text-gray-900"
+          className="p-2 border rounded mr-2"
           placeholder="アーティスト名"
           value={artistName}
           onChange={(e) => setArtistName(e.target.value)}
         />
         <select
-          className="p-2 rounded-lg border text-gray-900"
-          value={rating}
-          onChange={(e) => setRating(e.target.value as 'A'|'B'|'C')}
+          className="p-2 border rounded mr-2"
+          value={rank}
+          onChange={(e) => setRank(e.target.value as "A" | "B" | "C")}
         >
-          <option value="A">A：よく知ってる</option>
-          <option value="B">B：聞いたことある</option>
-          <option value="C">C：名前だけ知ってる／うろ覚え</option>
+          <option value="A">よく知ってる</option>
+          <option value="B">聞いたことある</option>
+          <option value="C">名前だけ知ってる／うろ覚え</option>
         </select>
         <button
+          className="px-4 py-2 bg-blue-500 text-white rounded"
           onClick={addSong}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition"
         >
           追加
         </button>
       </div>
 
-      {/* 曲リスト */}
-      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
-        <h2 className="font-semibold text-gray-900">🎶 登録曲一覧</h2>
-        <ul className="flex flex-col gap-1">
-          {songs.map((s) => (
-            <li key={s.key} className="flex justify-between items-center p-1 rounded hover:bg-gray-100">
-              <div>
-                <span className="font-bold text-gray-900">{s.name}</span> -{' '}
-                <span className="text-gray-700">{s.artist}</span> (
-                <span className="text-purple-700 font-semibold">
-                  {s.rating} ({ratingToPoint(s.rating)}pt)
-                </span>)
-              </div>
-              <button
-                onClick={() => deleteSong(s.key)}
-                className="text-red-500 font-bold px-2"
-              >
-                ❌
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
+      <h2 className="text-xl font-semibold text-gray-700 mb-2">
+        登録曲 ({songs.length} 曲)
+      </h2>
+      <ul className="mb-6">
+        {songs.map((s, i) => (
+          <li
+            key={i}
+            className="flex justify-between items-center bg-white p-2 mb-1 rounded shadow-sm"
+          >
+            <span className="text-gray-800">
+              {s.name} - {s.artist} ({s.rank})
+            </span>
+            <button
+              className="text-red-500 font-bold"
+              onClick={() => deleteSong(i)}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
 
-      {/* ルーム作成ボタン */}
-      <button
-        onClick={goToRoom}
-        className="mt-4 px-4 py-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition"
-      >
-        ➕ 新しいルームを作る
-      </button>
-    </main>
+      <div className="bg-white p-4 rounded shadow-sm">
+        <p className="text-gray-800 font-semibold">
+          総ポイント: {totalPoints} ポイント
+        </p>
+        <p className="text-gray-800 font-semibold">ランク: {getUserRank()}</p>
+      </div>
+    </div>
   );
 }
