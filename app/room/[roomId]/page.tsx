@@ -18,20 +18,17 @@ type Song = { name: string; artist: string; key: string; rating: Rating };
 type User = { id: string; name: string; songs: Song[] };
 
 type Catalog = {
-  artists: {
-    name: string;
-    albums: { name: string; songs: string[] }[];
-  }[];
+  artists: { name: string; songs: string[] }[];
 };
 
 function ratingToPoint(rating: Rating) {
   switch (rating) {
     case "A":
-      return 3;
+      return 3; // よく知ってる
     case "B":
-      return 2;
+      return 2; // 聞いたことある
     case "C":
-      return 1;
+      return 1; // 名前だけ知ってる／うろ覚え
   }
 }
 
@@ -40,11 +37,6 @@ function normalizeSong(name: string, artist: string) {
     .toLowerCase()
     .normalize("NFKC")
     .replace(/[\s\p{Punctuation}]/gu, "");
-}
-
-// 検索用：入力ゆらぎ対策（簡易）
-function normalizeForSearch(s: string) {
-  return s.toLowerCase().normalize("NFKC").replace(/[\s\p{Punctuation}]/gu, "");
 }
 
 export default function RoomPage() {
@@ -62,11 +54,10 @@ export default function RoomPage() {
   // data.json 用（選択式）
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [selectedArtist, setSelectedArtist] = useState<string>("");
-  const [selectedAlbum, setSelectedAlbum] = useState<string>("");
   const [selectedSong, setSelectedSong] = useState<string>("");
-  const [songQuery, setSongQuery] = useState<string>(""); // 🔎 検索
   const [rating, setRating] = useState<Rating>("A");
 
+  // localStorage userId をクライアントで取得（SSR対策）
   useEffect(() => {
     const id = localStorage.getItem("userId");
     if (!id) {
@@ -76,6 +67,7 @@ export default function RoomPage() {
     setUserId(id);
   }, [router]);
 
+  // data.json 読み込み
   useEffect(() => {
     (async () => {
       const res = await fetch("/data.json", { cache: "no-store" });
@@ -83,63 +75,26 @@ export default function RoomPage() {
       setCatalog(data);
 
       const firstArtist = data.artists?.[0]?.name ?? "";
-      const firstAlbum = data.artists?.[0]?.albums?.[0]?.name ?? "";
-      const firstSong = data.artists?.[0]?.albums?.[0]?.songs?.[0] ?? "";
+      const firstSong = data.artists?.[0]?.songs?.[0] ?? "";
       setSelectedArtist(firstArtist);
-      setSelectedAlbum(firstAlbum);
       setSelectedSong(firstSong);
     })();
   }, []);
 
-  // Artist 変更 → Album を先頭へ
+  // アーティスト変更時に曲候補を先頭へ
   useEffect(() => {
     if (!catalog) return;
     const a = catalog.artists.find((x) => x.name === selectedArtist);
-    const firstAlbum = a?.albums?.[0]?.name ?? "";
-    setSelectedAlbum(firstAlbum);
-    setSongQuery("");
+    const first = a?.songs?.[0] ?? "";
+    setSelectedSong(first);
   }, [selectedArtist, catalog]);
 
-  // Album 変更 → Song を先頭へ
-  useEffect(() => {
-    if (!catalog) return;
-    const a = catalog.artists.find((x) => x.name === selectedArtist);
-    const al = a?.albums.find((x) => x.name === selectedAlbum);
-    const firstSong = al?.songs?.[0] ?? "";
-    setSelectedSong(firstSong);
-    setSongQuery("");
-  }, [selectedAlbum, selectedArtist, catalog]);
-
-  const albumOptions = useMemo(() => {
+  const selectedArtistSongs = useMemo(() => {
     if (!catalog) return [];
-    return (
-      catalog.artists.find((a) => a.name === selectedArtist)?.albums ?? []
-    ).map((al) => al.name);
+    return catalog.artists.find((a) => a.name === selectedArtist)?.songs ?? [];
   }, [catalog, selectedArtist]);
 
-  const songOptionsAll = useMemo(() => {
-    if (!catalog) return [];
-    const a = catalog.artists.find((x) => x.name === selectedArtist);
-    const al = a?.albums.find((x) => x.name === selectedAlbum);
-    return al?.songs ?? [];
-  }, [catalog, selectedArtist, selectedAlbum]);
-
-  // 🔎 検索で絞り込み
-  const songOptionsFiltered = useMemo(() => {
-    const q = normalizeForSearch(songQuery);
-    if (!q) return songOptionsAll;
-    return songOptionsAll.filter((s) => normalizeForSearch(s).includes(q));
-  }, [songOptionsAll, songQuery]);
-
-  // 検索で候補が変わったら、選択曲が候補外なら先頭へ寄せる
-  useEffect(() => {
-    if (songOptionsFiltered.length === 0) return;
-    if (!songOptionsFiltered.includes(selectedSong)) {
-      setSelectedSong(songOptionsFiltered[0]);
-    }
-  }, [songOptionsFiltered, selectedSong]);
-
-  // 共有URL
+  // 共有URL（表示＆コピー用）
   useEffect(() => {
     setUrl(window.location.href);
   }, []);
@@ -150,7 +105,7 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // room 参加
+  // room 参加＆members を state に反映
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -174,7 +129,7 @@ export default function RoomPage() {
     })();
   }, [roomId, userId]);
 
-  // users リアルタイム取得
+  // users をリアルタイム取得（members のみ表示）
   useEffect(() => {
     if (roomMembers.length === 0) {
       setUsers([]);
@@ -189,7 +144,10 @@ export default function RoomPage() {
           list.push({ id: docSnap.id, name: data.name, songs: data.songs || [] });
         }
       });
+
+      // 表示順を安定させたい場合（members順）
       list.sort((a, b) => roomMembers.indexOf(a.id) - roomMembers.indexOf(b.id));
+
       setUsers(list);
     });
 
@@ -201,13 +159,13 @@ export default function RoomPage() {
     [users, userId]
   );
 
-  // 曲追加
+  // 曲追加（選択式）
   async function addSong() {
     if (!currentUser) return;
     if (!selectedArtist || !selectedSong) return;
 
     const key = normalizeSong(selectedSong, selectedArtist);
-    if (currentUser.songs.some((s) => s.key === key)) return;
+    if (currentUser.songs.some((s) => s.key === key)) return; // 同一ユーザー内重複防止
 
     const newSong: Song = {
       name: selectedSong,
@@ -229,24 +187,31 @@ export default function RoomPage() {
     await setDoc(doc(db, "users", currentUser.id), updated);
   }
 
-  // 共通曲
+  // 共通曲（keyベース）
   const commonKeys = useMemo(() => {
     if (users.length < 2) return [];
     const keysList = users.map((u) => u.songs.map((s) => s.key));
     return keysList.reduce((a, b) => a.filter((k) => b.includes(k)));
   }, [users]);
 
+  // 共通曲表示用：key -> {name, artist}
   const keyToSong = useMemo(() => {
     const map = new Map<string, Song>();
-    for (const u of users) for (const s of u.songs) if (!map.has(s.key)) map.set(s.key, s);
+    for (const u of users) {
+      for (const s of u.songs) {
+        if (!map.has(s.key)) map.set(s.key, s);
+      }
+    }
     return map;
   }, [users]);
 
+  // ログアウト（ルームからは抜けない：ログイン情報だけ消す）
   function logout() {
     localStorage.removeItem("userId");
     router.push("/login");
   }
 
+  // アカウント削除（users doc削除 + room membersから削除）
   async function deleteAccount() {
     if (!currentUser) return;
     const ok = confirm("本当にアカウントを削除しますか？この操作は戻せません。");
@@ -271,6 +236,7 @@ export default function RoomPage() {
         🎵 Music Match - ルーム
       </h1>
 
+      {/* ログイン中ユーザー表示 */}
       {currentUser && (
         <div className="bg-gray-200 p-2 rounded-lg text-gray-900 font-semibold text-center">
           ユーザー名: <span className="text-blue-700">{currentUser.name}</span> | UserID:{" "}
@@ -278,6 +244,7 @@ export default function RoomPage() {
         </div>
       )}
 
+      {/* URLコピー */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
         <span className="font-semibold text-gray-900">共有URL</span>
         <div className="break-words text-blue-700 font-medium">{url}</div>
@@ -290,6 +257,7 @@ export default function RoomPage() {
         {copied && <span className="text-green-600 font-medium mt-1">コピーしました！</span>}
       </div>
 
+      {/* ログアウト / アカウント削除 */}
       <div className="flex gap-2">
         <button
           onClick={logout}
@@ -305,87 +273,59 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* ✅ 選択式（Artist→Album→Song）＋ 🔎 検索 */}
+      {/* 曲追加（選択式：data.json） */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-3">
-        <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式＋検索）</h2>
+        <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式）</h2>
 
         {!catalog ? (
           <div className="text-gray-700">候補曲を読み込み中...</div>
         ) : (
-          <>
-            <div className="flex flex-col md:flex-row gap-2">
-              <select
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                value={selectedArtist}
-                onChange={(e) => setSelectedArtist(e.target.value)}
-              >
-                {catalog.artists.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
+          <div className="flex flex-col md:flex-row gap-2">
+            <select
+              className="flex-1 p-2 rounded-lg border text-gray-900"
+              value={selectedArtist}
+              onChange={(e) => setSelectedArtist(e.target.value)}
+            >
+              {catalog.artists.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
 
-              <select
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                value={selectedAlbum}
-                onChange={(e) => setSelectedAlbum(e.target.value)}
-              >
-                {albumOptions.map((al) => (
-                  <option key={al} value={al}>
-                    {al}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              className="flex-1 p-2 rounded-lg border text-gray-900"
+              value={selectedSong}
+              onChange={(e) => setSelectedSong(e.target.value)}
+            >
+              {selectedArtistSongs.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
 
-            <div className="flex flex-col md:flex-row gap-2">
-              <input
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                placeholder="曲名で検索（例：アイドル）"
-                value={songQuery}
-                onChange={(e) => setSongQuery(e.target.value)}
-              />
+            <select
+              className="p-2 rounded-lg border text-gray-900"
+              value={rating}
+              onChange={(e) => setRating(e.target.value as Rating)}
+            >
+              <option value="A">A：よく知ってる（3pt）</option>
+              <option value="B">B：聞いたことある（2pt）</option>
+              <option value="C">C：名前だけ知ってる／うろ覚え（1pt）</option>
+            </select>
 
-              <select
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                value={selectedSong}
-                onChange={(e) => setSelectedSong(e.target.value)}
-              >
-                {songOptionsFiltered.length === 0 ? (
-                  <option value="">該当なし</option>
-                ) : (
-                  songOptionsFiltered.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))
-                )}
-              </select>
-
-              <select
-                className="p-2 rounded-lg border text-gray-900"
-                value={rating}
-                onChange={(e) => setRating(e.target.value as Rating)}
-              >
-                <option value="A">A：よく知ってる（3pt）</option>
-                <option value="B">B：聞いたことある（2pt）</option>
-                <option value="C">C：名前だけ知ってる／うろ覚え（1pt）</option>
-              </select>
-
-              <button
-                onClick={addSong}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition"
-                disabled={!selectedSong}
-              >
-                追加
-              </button>
-            </div>
-          </>
+            <button
+              onClick={addSong}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition"
+            >
+              追加
+            </button>
+          </div>
         )}
       </div>
 
-      {/* ユーザーごとの曲（アーティスト表示） */}
+      {/* ユーザーごとの曲リスト（アーティスト表示あり） */}
       <div className="flex flex-col gap-4">
         {users.map((u) => (
           <div key={u.id} className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
@@ -420,7 +360,7 @@ export default function RoomPage() {
         ))}
       </div>
 
-      {/* 共通曲（アーティスト表示） */}
+      {/* 共通曲（アーティストも表示） */}
       <div className="bg-white p-3 rounded-lg shadow mt-2">
         <h2 className="font-semibold text-lg text-gray-900 mb-2">🎯 共通曲</h2>
 
