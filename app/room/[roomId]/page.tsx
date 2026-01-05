@@ -17,10 +17,6 @@ type Rating = "A" | "B" | "C";
 type Song = { name: string; artist: string; key: string; rating: Rating };
 type User = { id: string; name: string; songs: Song[] };
 
-type Catalog = {
-  artists: { name: string; songs: string[] }[];
-};
-
 function ratingToPoint(rating: Rating) {
   switch (rating) {
     case "A":
@@ -32,36 +28,16 @@ function ratingToPoint(rating: Rating) {
   }
 }
 
-function normalizeSong(name: string, artist: string) {
-  return (name + "_" + artist)
-    .toLowerCase()
-    .normalize("NFKC")
-    .replace(/[\s\p{Punctuation}]/gu, "");
-}
-
-function normalizeForSearch(s: string) {
-  return s.toLowerCase().normalize("NFKC").replace(/[\s\p{Punctuation}]/gu, "");
-}
-
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const router = useRouter();
 
   const [userId, setUserId] = useState<string | null>(null);
-
   const [users, setUsers] = useState<User[]>([]);
   const [roomMembers, setRoomMembers] = useState<string[]>([]);
 
   const [url, setUrl] = useState("");
   const [copied, setCopied] = useState(false);
-
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [selectedArtist, setSelectedArtist] = useState<string>("");
-  const [selectedSong, setSelectedSong] = useState<string>("");
-  const [rating, setRating] = useState<Rating>("A");
-
-  // ★検索
-  const [songSearch, setSongSearch] = useState<string>("");
 
   useEffect(() => {
     const id = localStorage.getItem("userId");
@@ -73,19 +49,6 @@ export default function RoomPage() {
   }, [router]);
 
   useEffect(() => {
-    (async () => {
-      const res = await fetch("/data.json", { cache: "no-store" });
-      const data = (await res.json()) as Catalog;
-      setCatalog(data);
-
-      const firstArtist = data.artists?.[0]?.name ?? "";
-      const firstSong = data.artists?.[0]?.songs?.[0] ?? "";
-      setSelectedArtist(firstArtist);
-      setSelectedSong(firstSong);
-    })();
-  }, []);
-
-  useEffect(() => {
     setUrl(window.location.href);
   }, []);
 
@@ -95,6 +58,7 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  // room 参加
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -118,6 +82,7 @@ export default function RoomPage() {
     })();
   }, [roomId, userId]);
 
+  // users リアルタイム取得
   useEffect(() => {
     if (roomMembers.length === 0) {
       setUsers([]);
@@ -144,68 +109,6 @@ export default function RoomPage() {
     () => users.find((u) => u.id === userId) ?? null,
     [users, userId]
   );
-
-  useEffect(() => {
-    if (!catalog) return;
-    const a = catalog.artists.find((x) => x.name === selectedArtist);
-    const first = a?.songs?.[0] ?? "";
-    setSelectedSong(first);
-  }, [selectedArtist, catalog]);
-
-  const filteredSongs = useMemo(() => {
-    if (!catalog) return [];
-    const base = catalog.artists.find((a) => a.name === selectedArtist)?.songs ?? [];
-    const q = normalizeForSearch(songSearch.trim());
-    if (!q) return base;
-    return base.filter((title) => normalizeForSearch(title).includes(q));
-  }, [catalog, selectedArtist, songSearch]);
-
-  useEffect(() => {
-    if (filteredSongs.length === 0) {
-      setSelectedSong("");
-      return;
-    }
-    if (!selectedSong || !filteredSongs.includes(selectedSong)) {
-      setSelectedSong(filteredSongs[0]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredSongs]);
-
-  // ★次の曲へ
-  function goNextSong() {
-    if (filteredSongs.length === 0) return;
-    const idx = filteredSongs.indexOf(selectedSong);
-    const nextIdx = idx >= 0 ? (idx + 1) % filteredSongs.length : 0;
-    setSelectedSong(filteredSongs[nextIdx]);
-  }
-
-  async function addSong() {
-    if (!currentUser) return;
-    if (!selectedArtist || !selectedSong) return;
-
-    const key = normalizeSong(selectedSong, selectedArtist);
-    if (currentUser.songs.some((s) => s.key === key)) {
-      goNextSong();
-      return;
-    }
-
-    const newSong: Song = { name: selectedSong, artist: selectedArtist, key, rating };
-    const updated = { ...currentUser, songs: [...currentUser.songs, newSong] };
-    await setDoc(doc(db, "users", currentUser.id), updated);
-
-    // ★追加後は次へ
-    goNextSong();
-  }
-
-  function passSong() {
-    goNextSong();
-  }
-
-  async function deleteSong(songKey: string) {
-    if (!currentUser) return;
-    const updated = { ...currentUser, songs: currentUser.songs.filter((s) => s.key !== songKey) };
-    await setDoc(doc(db, "users", currentUser.id), updated);
-  }
 
   const commonKeys = useMemo(() => {
     if (users.length < 2) return [];
@@ -284,86 +187,6 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* 検索つき選択式 + 追加/パス */}
-      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-3">
-        <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式 / 検索）</h2>
-
-        {!catalog ? (
-          <div className="text-gray-700">候補曲を読み込み中...</div>
-        ) : (
-          <>
-            <div className="flex flex-col md:flex-row gap-2">
-              <select
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                value={selectedArtist}
-                onChange={(e) => setSelectedArtist(e.target.value)}
-              >
-                {catalog.artists.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                placeholder="曲名で検索"
-                value={songSearch}
-                onChange={(e) => setSongSearch(e.target.value)}
-              />
-
-              <select
-                className="flex-1 p-2 rounded-lg border text-gray-900"
-                value={selectedSong}
-                onChange={(e) => setSelectedSong(e.target.value)}
-                disabled={filteredSongs.length === 0}
-              >
-                {filteredSongs.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                className="p-2 rounded-lg border text-gray-900"
-                value={rating}
-                onChange={(e) => setRating(e.target.value as Rating)}
-              >
-                <option value="A">A：よく知ってる（3pt）</option>
-                <option value="B">B：聞いたことある（2pt）</option>
-                <option value="C">C：名前だけ知ってる／うろ覚え（1pt）</option>
-              </select>
-
-              {/* ★ボタン2つ：追加 / パス */}
-              <div className="flex gap-2">
-                <button
-                  onClick={addSong}
-                  className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
-                  disabled={!selectedSong}
-                >
-                  追加
-                </button>
-                <button
-                  onClick={passSong}
-                  className="px-4 py-2 bg-gray-500 text-white rounded-lg shadow hover:bg-gray-600 transition disabled:opacity-50"
-                  disabled={!selectedSong}
-                  title="追加せず次へ"
-                >
-                  パス
-                </button>
-              </div>
-            </div>
-
-            {filteredSongs.length === 0 && (
-              <div className="text-sm text-gray-700">
-                検索に一致する曲がありません（検索語を消すか、data.json に候補を追加してください）
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
       {/* ユーザー曲 */}
       <div className="flex flex-col gap-4">
         {users.map((u) => (
@@ -382,16 +205,6 @@ export default function RoomPage() {
                       ({s.rating} / {ratingToPoint(s.rating)}pt)
                     </span>
                   </div>
-
-                  {u.id === userId && (
-                    <button
-                      onClick={() => deleteSong(s.key)}
-                      className="text-red-500 font-bold px-2"
-                      title="削除"
-                    >
-                      ❌
-                    </button>
-                  )}
                 </li>
               ))}
             </ul>
