@@ -32,6 +32,18 @@ function ratingToPoint(rating: Rating) {
   }
 }
 
+// ★重み
+function ratingWeight(rating: Rating) {
+  switch (rating) {
+    case "A":
+      return 1.0;
+    case "B":
+      return 0.5;
+    case "C":
+      return 0.2;
+  }
+}
+
 function normalizeSong(name: string, artist: string) {
   return (name + "_" + artist)
     .toLowerCase()
@@ -48,15 +60,12 @@ export default function HomePage() {
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
-
   const [catalog, setCatalog] = useState<Catalog | null>(null);
 
-  // 候補（選択式）
   const [selectedArtist, setSelectedArtist] = useState<string>("");
   const [selectedSong, setSelectedSong] = useState<string>("");
   const [songSearch, setSongSearch] = useState<string>("");
 
-  // 登録曲検索
   const [mySongSearch, setMySongSearch] = useState<string>("");
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -85,7 +94,6 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!userId) return;
-
     const unsub = onSnapshot(doc(db, "users", userId), (snap) => {
       if (snap.exists()) {
         const data = snap.data() as any;
@@ -93,7 +101,6 @@ export default function HomePage() {
         setSongs(data.songs || []);
       }
     });
-
     return () => unsub();
   }, [userId]);
 
@@ -104,7 +111,6 @@ export default function HomePage() {
     setSelectedSong(first);
   }, [selectedArtist, catalog]);
 
-  // 候補曲（検索で絞り込み）
   const filteredSongs = useMemo(() => {
     if (!catalog) return [];
     const base = catalog.artists.find((a) => a.name === selectedArtist)?.songs ?? [];
@@ -124,7 +130,6 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSongs]);
 
-  // 次の曲へ
   function goNextSong() {
     if (filteredSongs.length === 0) return;
     const idx = filteredSongs.indexOf(selectedSong);
@@ -137,8 +142,6 @@ export default function HomePage() {
     if (!selectedArtist || !selectedSong) return;
 
     const key = normalizeSong(selectedSong, selectedArtist);
-
-    // 重複：追加せず次へ
     if (songs.some((s) => s.key === key)) {
       goNextSong();
       return;
@@ -168,29 +171,35 @@ export default function HomePage() {
   const totalPoints = songs.reduce((sum, s) => sum + ratingToPoint(s.rating), 0);
   const rank = getRank(totalPoints);
 
-  // 登録曲一覧の検索
   const filteredMySongs = useMemo(() => {
     const q = normalizeForSearch(mySongSearch.trim());
     if (!q) return songs;
     return songs.filter((s) => normalizeForSearch(`${s.name}_${s.artist}`).includes(q));
   }, [songs, mySongSearch]);
 
-  // ★アーティストごとの「知ってる％」
+  // ★重み付き：アーティスト別％
   const artistStats = useMemo(() => {
     if (!catalog) return [];
 
-    // 自分が登録している曲数（アーティスト別）
-    const mineCountByArtist = new Map<string, number>();
-    for (const s of songs) {
-      mineCountByArtist.set(s.artist, (mineCountByArtist.get(s.artist) ?? 0) + 1);
+    // 同一曲が複数登録されることはない想定だが、安全に「曲keyごとに1回」扱い
+    const songByKey = new Map<string, Song>();
+    for (const s of songs) songByKey.set(s.key, s);
+
+    // アーティストごとの重み合計
+    const weightSumByArtist = new Map<string, number>();
+    for (const s of songByKey.values()) {
+      weightSumByArtist.set(
+        s.artist,
+        (weightSumByArtist.get(s.artist) ?? 0) + ratingWeight(s.rating)
+      );
     }
 
     return catalog.artists
       .map((a) => {
-        const total = a.songs.length;
-        const mine = mineCountByArtist.get(a.name) ?? 0;
-        const percent = total > 0 ? Math.round((mine / total) * 100) : 0;
-        return { artist: a.name, mine, total, percent };
+        const total = a.songs.length; // 分母（全曲数）
+        const weightSum = weightSumByArtist.get(a.name) ?? 0; // 分子（重み合計）
+        const percent = total > 0 ? Math.round((weightSum / total) * 100) : 0;
+        return { artist: a.name, weightSum, total, percent };
       })
       .sort((x, y) => y.percent - x.percent);
   }, [catalog, songs]);
@@ -211,9 +220,13 @@ export default function HomePage() {
         <span className="font-bold text-yellow-600">{rank}</span>
       </div>
 
-      {/* ★アーティスト別「知ってる％」 */}
+      {/* ★重み付き％ */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
-        <h2 className="font-semibold text-gray-900">📊 アーティスト別 知ってる％</h2>
+        <h2 className="font-semibold text-gray-900">📊 アーティスト別 知ってる％（重み付き）</h2>
+        <div className="text-sm text-gray-700">
+          A=1.0 / B=0.5 / C=0.2（全曲Aなら100%）
+        </div>
+
         {!catalog ? (
           <div className="text-gray-700">読み込み中...</div>
         ) : (
@@ -226,7 +239,9 @@ export default function HomePage() {
                 <div className="text-gray-900 font-semibold">{a.artist}</div>
                 <div className="text-gray-800">
                   <span className="font-bold">{a.percent}%</span>{" "}
-                  <span className="text-gray-600">({a.mine}/{a.total})</span>
+                  <span className="text-gray-600">
+                    （重み合計 {a.weightSum.toFixed(1)} / 全曲 {a.total}）
+                  </span>
                 </div>
               </div>
             ))}
@@ -234,7 +249,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* 候補から追加：A/B/Cボタン + パス */}
+      {/* 追加（A/B/Cボタン＋パス） */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-3">
         <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式 / 検索）</h2>
 
@@ -317,7 +332,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* 登録曲一覧（検索つき） */}
+      {/* 登録曲一覧（検索） */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
         <div className="flex flex-col md:flex-row gap-2 md:items-center">
           <h2 className="font-semibold text-gray-900">🎶 登録曲一覧</h2>

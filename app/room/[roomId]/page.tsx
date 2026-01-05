@@ -21,6 +21,28 @@ type Catalog = {
   artists: { name: string; songs: string[] }[];
 };
 
+function ratingToPoint(rating: Rating) {
+  switch (rating) {
+    case "A":
+      return 3;
+    case "B":
+      return 2;
+    case "C":
+      return 1;
+  }
+}
+
+function ratingWeight(rating: Rating) {
+  switch (rating) {
+    case "A":
+      return 1.0;
+    case "B":
+      return 0.5;
+    case "C":
+      return 0.2;
+  }
+}
+
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const router = useRouter();
@@ -32,7 +54,6 @@ export default function RoomPage() {
   const [url, setUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // ★data.json（割合表示に必要）
   const [catalog, setCatalog] = useState<Catalog | null>(null);
 
   useEffect(() => {
@@ -62,7 +83,6 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // room 参加
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -86,7 +106,6 @@ export default function RoomPage() {
     })();
   }, [roomId, userId]);
 
-  // users リアルタイム取得
   useEffect(() => {
     if (roomMembers.length === 0) {
       setUsers([]);
@@ -130,25 +149,35 @@ export default function RoomPage() {
     return map;
   }, [users]);
 
-  // ★ルーム参加者全体の「知ってる％」（アーティスト別）
+  // ★ルーム全体：曲keyごとに「最大重み」を採用してアーティスト別に合計
   const roomArtistStats = useMemo(() => {
     if (!catalog) return [];
 
-    // 参加者が知ってる曲key（artist別にユニークカウント）
-    const knownKeysByArtist = new Map<string, Set<string>>();
+    // 曲key -> { artist, maxWeight }
+    const maxWeightByKey = new Map<string, { artist: string; weight: number }>();
+
     for (const u of users) {
       for (const s of u.songs) {
-        if (!knownKeysByArtist.has(s.artist)) knownKeysByArtist.set(s.artist, new Set());
-        knownKeysByArtist.get(s.artist)!.add(s.key);
+        const w = ratingWeight(s.rating);
+        const cur = maxWeightByKey.get(s.key);
+        if (!cur || w > cur.weight) {
+          maxWeightByKey.set(s.key, { artist: s.artist, weight: w });
+        }
       }
+    }
+
+    // アーティスト別に重み合計
+    const weightSumByArtist = new Map<string, number>();
+    for (const v of maxWeightByKey.values()) {
+      weightSumByArtist.set(v.artist, (weightSumByArtist.get(v.artist) ?? 0) + v.weight);
     }
 
     return catalog.artists
       .map((a) => {
         const total = a.songs.length;
-        const known = knownKeysByArtist.get(a.name)?.size ?? 0;
-        const percent = total > 0 ? Math.round((known / total) * 100) : 0;
-        return { artist: a.name, known, total, percent };
+        const weightSum = weightSumByArtist.get(a.name) ?? 0;
+        const percent = total > 0 ? Math.round((weightSum / total) * 100) : 0;
+        return { artist: a.name, weightSum, total, percent };
       })
       .sort((x, y) => y.percent - x.percent);
   }, [catalog, users]);
@@ -180,7 +209,6 @@ export default function RoomPage() {
     <main className="min-h-screen p-4 bg-gray-100 flex flex-col gap-4">
       <h1 className="text-2xl font-bold text-center text-gray-900">🎵 Music Match - ルーム</h1>
 
-      {/* ★ホームへ戻る */}
       <button
         onClick={() => router.push("/")}
         className="px-4 py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 transition"
@@ -222,9 +250,11 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* ★アーティスト別 知ってる％（ルーム全体） */}
+      {/* ★重み付き％ */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
-        <h2 className="font-semibold text-gray-900">📊 ルーム全体：アーティスト別 知ってる％</h2>
+        <h2 className="font-semibold text-gray-900">📊 ルーム全体：知ってる％（重み付き）</h2>
+        <div className="text-sm text-gray-700">A=1.0 / B=0.5 / C=0.2（曲ごとに最大重みを採用）</div>
+
         {!catalog ? (
           <div className="text-gray-700">読み込み中...</div>
         ) : (
@@ -237,7 +267,9 @@ export default function RoomPage() {
                 <div className="text-gray-900 font-semibold">{a.artist}</div>
                 <div className="text-gray-800">
                   <span className="font-bold">{a.percent}%</span>{" "}
-                  <span className="text-gray-600">({a.known}/{a.total})</span>
+                  <span className="text-gray-600">
+                    （重み合計 {a.weightSum.toFixed(1)} / 全曲 {a.total}）
+                  </span>
                 </div>
               </div>
             ))}
@@ -260,7 +292,7 @@ export default function RoomPage() {
                     <span className="font-semibold">{s.name}</span>{" "}
                     <span className="text-gray-700">- {s.artist}</span>{" "}
                     <span className="text-purple-700 font-semibold">
-                      ({s.rating} / {s.rating === "A" ? "3" : s.rating === "B" ? "2" : "1"}pt)
+                      ({s.rating} / {ratingToPoint(s.rating)}pt)
                     </span>
                   </div>
                 </li>
