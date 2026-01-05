@@ -17,10 +17,6 @@ type Rating = "A" | "B" | "C";
 type Song = { name: string; artist: string; key: string; rating: Rating };
 type User = { id: string; name: string; songs: Song[] };
 
-type Catalog = {
-  artists: { name: string; songs: string[] }[];
-};
-
 function ratingToPoint(rating: Rating) {
   switch (rating) {
     case "A":
@@ -31,7 +27,6 @@ function ratingToPoint(rating: Rating) {
       return 1;
   }
 }
-
 function ratingWeight(rating: Rating) {
   switch (rating) {
     case "A":
@@ -41,6 +36,18 @@ function ratingWeight(rating: Rating) {
     case "C":
       return 0.2;
   }
+}
+
+type SongRow = { key: string; name: string; artist: string; byUser: Record<string, Rating> };
+
+type Counts = { A: number; B: number; C: number };
+function emptyCounts(): Counts {
+  return { A: 0, B: 0, C: 0 };
+}
+function imbalance(c: Counts) {
+  const mx = Math.max(c.A, c.B, c.C);
+  const mn = Math.min(c.A, c.B, c.C);
+  return mx - mn;
 }
 
 export default function RoomPage() {
@@ -54,7 +61,9 @@ export default function RoomPage() {
   const [url, setUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  // 生成したプレイリスト
+  const [playlist, setPlaylist] = useState<SongRow[]>([]);
+  const [playlistMode, setPlaylistMode] = useState<"raw" | "balanced" | "">("");
 
   useEffect(() => {
     const id = localStorage.getItem("userId");
@@ -66,14 +75,6 @@ export default function RoomPage() {
   }, [router]);
 
   useEffect(() => {
-    (async () => {
-      const res = await fetch("/data.json", { cache: "no-store" });
-      const data = (await res.json()) as Catalog;
-      setCatalog(data);
-    })();
-  }, []);
-
-  useEffect(() => {
     setUrl(window.location.href);
   }, []);
 
@@ -83,6 +84,7 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  // room 参加
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -106,6 +108,7 @@ export default function RoomPage() {
     })();
   }, [roomId, userId]);
 
+  // users リアルタイム取得
   useEffect(() => {
     if (roomMembers.length === 0) {
       setUsers([]);
@@ -133,12 +136,21 @@ export default function RoomPage() {
     [users, userId]
   );
 
+  // userId -> 表示名
+  const userNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const u of users) m.set(u.id, u.name);
+    return m;
+  }, [users]);
+
+  // 共通曲キー
   const commonKeys = useMemo(() => {
     if (users.length < 2) return [];
     const keysList = users.map((u) => u.songs.map((s) => s.key));
     return keysList.reduce((a, b) => a.filter((k) => b.includes(k)));
   }, [users]);
 
+  // key -> {name, artist}（代表）
   const keyToSong = useMemo(() => {
     const map = new Map<string, Song>();
     for (const u of users) {
@@ -149,38 +161,193 @@ export default function RoomPage() {
     return map;
   }, [users]);
 
-  // ★ルーム全体：曲keyごとに「最大重み」を採用してアーティスト別に合計
-  const roomArtistStats = useMemo(() => {
-    if (!catalog) return [];
+  // 共通曲の「ユーザー別評価」を集計した行データ
+  const commonRows: SongRow[] = useMemo(() => {
+    if (users.length < 2) return [];
+    const userIds = users.map((u) => u.id);
 
-    // 曲key -> { artist, maxWeight }
-    const maxWeightByKey = new Map<string, { artist: string; weight: number }>();
-
+    // userId -> (key -> rating)
+    const ratingMapByUser = new Map<string, Map<string, Rating>>();
     for (const u of users) {
-      for (const s of u.songs) {
-        const w = ratingWeight(s.rating);
-        const cur = maxWeightByKey.get(s.key);
-        if (!cur || w > cur.weight) {
-          maxWeightByKey.set(s.key, { artist: s.artist, weight: w });
+      const m = new Map<string, Rating>();
+      for (const s of u.songs) m.set(s.key, s.rating);
+      ratingMapByUser.set(u.id, m);
+    }
+
+    const rows: SongRow[] = [];
+    for (const key of commonKeys) {
+      const rep = keyToSong.get(key);
+      if (!rep) continue;
+
+      const byUser: Record<string, Rating> = {};
+      let ok = true;
+      for (const uid of userIds) {
+        const r = ratingMapByUser.get(uid)?.get(key);
+        if (!r) {
+          ok = false;
+          break;
         }
+        byUser[uid] = r;
+      }
+      if (!ok) continue;
+
+      rows.push({ key, name: rep.name, artist: rep.artist, byUser });
+    }
+
+    // 表示を安定させたいので、曲名→アーティストでソート
+    rows.sort((a, b) => (a.name + a.artist).localeCompare(b.name + b.artist, "ja"));
+    return rows;
+  }, [users, commonKeys, keyToSong]);
+
+  // プレイリストのユーザー別 A/B/C 内訳
+  const playlistCountsByUser = useMemo(() => {
+    const map = new Map<string, Counts>();
+    for (const u of users) map.set(u.id, emptyCounts());
+
+    for (const row of playlist) {
+      for (const uid of Object.keys(row.byUser)) {
+        const c = map.get(uid);
+        if (!c) continue;
+        const r = row.byUser[uid];
+        c[r] += 1;
+      }
+    }
+    return map;
+  }, [playlist, users]);
+
+  function allUsersImbalanceMax(rows: SongRow[]) {
+    const tmp = new Map<string, Counts>();
+    for (const u of users) tmp.set(u.id, emptyCounts());
+    for (const row of rows) {
+      for (const uid of Object.keys(row.byUser)) {
+        tmp.get(uid)![row.byUser[uid]] += 1;
+      }
+    }
+    let mx = 0;
+    for (const u of users) {
+      mx = Math.max(mx, imbalance(tmp.get(u.id)!));
+    }
+    return mx;
+  }
+
+  // ✅ ボタン1：そのまま（全共通曲）
+  function buildRawPlaylist() {
+    setPlaylist(commonRows);
+    setPlaylistMode("raw");
+  }
+
+  // ✅ ボタン2：均等化（上限なし）…「差最大1」になるまで削る（可能な範囲で）
+  function buildBalancedPlaylist() {
+    // ベースは全共通曲
+    let rows = [...commonRows];
+    setPlaylistMode("balanced");
+
+    if (users.length < 2 || rows.length === 0) {
+      setPlaylist(rows);
+      return;
+    }
+
+    // userId -> counts
+    const counts = new Map<string, Counts>();
+    for (const u of users) counts.set(u.id, emptyCounts());
+
+    // 初期カウント
+    for (const row of rows) {
+      for (const uid of Object.keys(row.byUser)) {
+        counts.get(uid)![row.byUser[uid]] += 1;
       }
     }
 
-    // アーティスト別に重み合計
-    const weightSumByArtist = new Map<string, number>();
-    for (const v of maxWeightByKey.values()) {
-      weightSumByArtist.set(v.artist, (weightSumByArtist.get(v.artist) ?? 0) + v.weight);
+    const userIds = users.map((u) => u.id);
+
+    // ループ：全員の imbalance が 1 以下になれば終了
+    // ただし、削りすぎ防止 & 無限ループ防止で上限も置く
+    let guard = 0;
+    const maxIter = Math.max(5000, rows.length * 20);
+
+    function maxImb() {
+      let m = 0;
+      for (const uid of userIds) m = Math.max(m, imbalance(counts.get(uid)!));
+      return m;
     }
 
-    return catalog.artists
-      .map((a) => {
-        const total = a.songs.length;
-        const weightSum = weightSumByArtist.get(a.name) ?? 0;
-        const percent = total > 0 ? Math.round((weightSum / total) * 100) : 0;
-        return { artist: a.name, weightSum, total, percent };
-      })
-      .sort((x, y) => y.percent - x.percent);
-  }, [catalog, users]);
+    // 「偏っている評価」を減らす曲を選んで削る（貪欲）
+    while (rows.length > 0 && maxImb() > 1 && guard < maxIter) {
+      guard++;
+
+      // 今一番 imbalance が大きいユーザーを見つける
+      let worstUid = userIds[0];
+      let worstImb = -1;
+      for (const uid of userIds) {
+        const im = imbalance(counts.get(uid)!);
+        if (im > worstImb) {
+          worstImb = im;
+          worstUid = uid;
+        }
+      }
+      const cWorst = counts.get(worstUid)!;
+
+      // worstユーザーで一番多い評価（A/B/C）を探す
+      const maxVal = Math.max(cWorst.A, cWorst.B, cWorst.C);
+      const heavyRatings: Rating[] = (["A", "B", "C"] as Rating[]).filter(
+        (r) => cWorst[r] === maxVal
+      );
+
+      // 削る候補をスコア化：
+      //  - worstユーザーの heavyRating を減らせるならプラス
+      //  - 他ユーザーの imbalance を悪化させにくい曲を優先
+      let bestIdx = -1;
+      let bestScore = -Infinity;
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+
+        // worstユーザーの偏りを減らせない曲は基本弱い
+        const rw = row.byUser[worstUid];
+        let score = 0;
+
+        // worstの heavyRating を減らせるなら大きく加点
+        if (heavyRatings.includes(rw)) score += 5;
+
+        // “削ると imbalance が改善するか/悪化するか” を全ユーザーで見る
+        // 近似：削除後の imbalance の変化を合計（改善=加点、悪化=減点）
+        for (const uid of userIds) {
+          const before = imbalance(counts.get(uid)!);
+          // 仮に1つ減らす
+          const r = row.byUser[uid];
+          const c = counts.get(uid)!;
+          const afterCounts: Counts = { A: c.A, B: c.B, C: c.C };
+          afterCounts[r] = Math.max(0, afterCounts[r] - 1);
+          const after = imbalance(afterCounts);
+
+          score += (before - after) * 2; // 改善(+)/悪化(-)
+        }
+
+        // なるべく曲数を多く残したいので、同点なら「削った後も改善幅が大きいもの」優先
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx === -1) break;
+
+      // bestIdx の曲を削除
+      const removed = rows.splice(bestIdx, 1)[0];
+      for (const uid of userIds) {
+        const r = removed.byUser[uid];
+        counts.get(uid)![r] = Math.max(0, counts.get(uid)![r] - 1);
+      }
+    }
+
+    setPlaylist(rows);
+  }
+
+  async function copyPlaylist() {
+    if (playlist.length === 0) return;
+    const text = playlist.map((s) => `${s.name} - ${s.artist}`).join("\n");
+    await navigator.clipboard.writeText(text);
+  }
 
   function logout() {
     localStorage.removeItem("userId");
@@ -204,6 +371,12 @@ export default function RoomPage() {
     localStorage.removeItem("userId");
     router.push("/login");
   }
+
+  const maxImbNow = useMemo(() => {
+    if (playlist.length === 0 || users.length === 0) return 0;
+    return allUsersImbalanceMax(playlist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlist, users.length]);
 
   return (
     <main className="min-h-screen p-4 bg-gray-100 flex flex-col gap-4">
@@ -250,34 +423,128 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* ★重み付き％ */}
-      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
-        <h2 className="font-semibold text-gray-900">📊 ルーム全体：知ってる％（重み付き）</h2>
-        <div className="text-sm text-gray-700">A=1.0 / B=0.5 / C=0.2（曲ごとに最大重みを採用）</div>
+      {/* 共通曲一覧 */}
+      <div className="bg-white p-3 rounded-lg shadow">
+        <h2 className="font-semibold text-lg text-gray-900 mb-2">
+          🎯 共通曲（{commonRows.length}曲）
+        </h2>
 
-        {!catalog ? (
-          <div className="text-gray-700">読み込み中...</div>
+        {commonRows.length === 0 ? (
+          <div className="text-gray-700">共通曲はまだありません（2人以上・登録が必要）</div>
         ) : (
-          <div className="flex flex-col gap-1">
-            {roomArtistStats.map((a) => (
-              <div
-                key={a.artist}
-                className="flex items-center justify-between rounded-lg px-2 py-2 bg-gray-50"
-              >
-                <div className="text-gray-900 font-semibold">{a.artist}</div>
-                <div className="text-gray-800">
-                  <span className="font-bold">{a.percent}%</span>{" "}
-                  <span className="text-gray-600">
-                    （重み合計 {a.weightSum.toFixed(1)} / 全曲 {a.total}）
-                  </span>
+          <div className="text-gray-700 text-sm">
+            この共通曲からプレイリストを生成できます。
+          </div>
+        )}
+
+        {/* ★ボタン2つ */}
+        <div className="mt-3 flex flex-col md:flex-row gap-2">
+          <button
+            onClick={buildRawPlaylist}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg shadow hover:bg-emerald-700 transition disabled:opacity-50"
+            disabled={commonRows.length === 0}
+          >
+            ✅ そのまま共通曲プレイリスト作成（全件）
+          </button>
+
+          <button
+            onClick={buildBalancedPlaylist}
+            className="px-4 py-2 bg-orange-600 text-white rounded-lg shadow hover:bg-orange-700 transition disabled:opacity-50"
+            disabled={commonRows.length === 0}
+            title="ユーザー別A/B/Cの偏り（最大-最小）をできるだけ小さくするために、必要最小限だけ曲を削ります"
+          >
+            ⚖️ 均等化プレイリスト作成（上限なし）
+          </button>
+        </div>
+      </div>
+
+      {/* 生成結果 */}
+      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
+        <div className="flex flex-col md:flex-row md:items-center gap-2">
+          <h2 className="font-semibold text-gray-900">
+            🎧 生成プレイリスト{" "}
+            {playlistMode === "raw"
+              ? "（そのまま）"
+              : playlistMode === "balanced"
+              ? "（均等化）"
+              : ""}
+          </h2>
+
+          <div className="md:ml-auto flex gap-2">
+            <button
+              onClick={copyPlaylist}
+              className="px-3 py-2 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700 transition disabled:opacity-50"
+              disabled={playlist.length === 0}
+            >
+              📋 曲名リストをコピー
+            </button>
+          </div>
+        </div>
+
+        <div className="text-gray-700 text-sm">
+          曲数: <span className="font-semibold text-gray-900">{playlist.length}</span>
+          {playlistMode === "balanced" && (
+            <>
+              {" "}
+              / 偏り(max-min) 最大:{" "}
+              <span className="font-semibold text-gray-900">{maxImbNow}</span>
+              <span className="text-gray-500">（目標は1以下）</span>
+            </>
+          )}
+        </div>
+
+        {playlist.length === 0 ? (
+          <div className="text-gray-700">まだ生成されていません。</div>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {playlist.map((s) => (
+              <li key={s.key} className="p-2 rounded bg-gray-50">
+                <div className="text-gray-900 font-semibold">
+                  {s.name} <span className="text-gray-600 font-normal">- {s.artist}</span>
                 </div>
-              </div>
+
+                {/* ユーザー別評価 */}
+                <div className="text-sm text-gray-700 mt-1 flex flex-wrap gap-2">
+                  {Object.entries(s.byUser).map(([uid, r]) => (
+                    <span key={uid} className="px-2 py-0.5 rounded bg-white border">
+                      {userNameById.get(uid) ?? uid}:{" "}
+                      <span className="font-semibold text-gray-900">{r}</span>
+                      <span className="text-gray-500">（w={ratingWeight(r)}）</span>
+                    </span>
+                  ))}
+                </div>
+              </li>
             ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ユーザー別 内訳 */}
+      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
+        <h2 className="font-semibold text-gray-900">📌 ユーザー別 A/B/C 内訳（生成プレイリスト）</h2>
+        {playlist.length === 0 ? (
+          <div className="text-gray-700">プレイリスト生成後に表示されます。</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {users.map((u) => {
+              const c = playlistCountsByUser.get(u.id) ?? emptyCounts();
+              return (
+                <div key={u.id} className="bg-gray-50 rounded-lg p-2 flex justify-between">
+                  <div className="text-gray-900 font-semibold">{u.name}</div>
+                  <div className="text-gray-800">
+                    A:{c.A} / B:{c.B} / C:{c.C}{" "}
+                    <span className="text-gray-500">
+                      （偏り {imbalance(c)}）
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* ユーザー曲 */}
+      {/* 参考：各ユーザー曲 */}
       <div className="flex flex-col gap-4">
         {users.map((u) => (
           <div key={u.id} className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
@@ -300,27 +567,6 @@ export default function RoomPage() {
             </ul>
           </div>
         ))}
-      </div>
-
-      {/* 共通曲 */}
-      <div className="bg-white p-3 rounded-lg shadow mt-2">
-        <h2 className="font-semibold text-lg text-gray-900 mb-2">🎯 共通曲</h2>
-
-        {commonKeys.length === 0 ? (
-          <div className="text-gray-700">共通曲はまだありません（2人以上・登録が必要）</div>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {commonKeys.map((k) => {
-              const s = keyToSong.get(k);
-              return (
-                <li key={k} className="text-gray-900">
-                  <span className="font-semibold">{s?.name ?? "?"}</span>{" "}
-                  <span className="text-gray-700">- {s?.artist ?? ""}</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
       </div>
     </main>
   );
