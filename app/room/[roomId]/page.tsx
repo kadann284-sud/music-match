@@ -17,16 +17,9 @@ type Rating = "A" | "B" | "C";
 type Song = { name: string; artist: string; key: string; rating: Rating };
 type User = { id: string; name: string; songs: Song[] };
 
-function ratingToPoint(rating: Rating) {
-  switch (rating) {
-    case "A":
-      return 3;
-    case "B":
-      return 2;
-    case "C":
-      return 1;
-  }
-}
+type Catalog = {
+  artists: { name: string; songs: string[] }[];
+};
 
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -39,6 +32,9 @@ export default function RoomPage() {
   const [url, setUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
+  // ★data.json（割合表示に必要）
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+
   useEffect(() => {
     const id = localStorage.getItem("userId");
     if (!id) {
@@ -47,6 +43,14 @@ export default function RoomPage() {
     }
     setUserId(id);
   }, [router]);
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/data.json", { cache: "no-store" });
+      const data = (await res.json()) as Catalog;
+      setCatalog(data);
+    })();
+  }, []);
 
   useEffect(() => {
     setUrl(window.location.href);
@@ -126,6 +130,29 @@ export default function RoomPage() {
     return map;
   }, [users]);
 
+  // ★ルーム参加者全体の「知ってる％」（アーティスト別）
+  const roomArtistStats = useMemo(() => {
+    if (!catalog) return [];
+
+    // 参加者が知ってる曲key（artist別にユニークカウント）
+    const knownKeysByArtist = new Map<string, Set<string>>();
+    for (const u of users) {
+      for (const s of u.songs) {
+        if (!knownKeysByArtist.has(s.artist)) knownKeysByArtist.set(s.artist, new Set());
+        knownKeysByArtist.get(s.artist)!.add(s.key);
+      }
+    }
+
+    return catalog.artists
+      .map((a) => {
+        const total = a.songs.length;
+        const known = knownKeysByArtist.get(a.name)?.size ?? 0;
+        const percent = total > 0 ? Math.round((known / total) * 100) : 0;
+        return { artist: a.name, known, total, percent };
+      })
+      .sort((x, y) => y.percent - x.percent);
+  }, [catalog, users]);
+
   function logout() {
     localStorage.removeItem("userId");
     router.push("/login");
@@ -152,6 +179,14 @@ export default function RoomPage() {
   return (
     <main className="min-h-screen p-4 bg-gray-100 flex flex-col gap-4">
       <h1 className="text-2xl font-bold text-center text-gray-900">🎵 Music Match - ルーム</h1>
+
+      {/* ★ホームへ戻る */}
+      <button
+        onClick={() => router.push("/")}
+        className="px-4 py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 transition"
+      >
+        🏠 ホームへ戻る
+      </button>
 
       {currentUser && (
         <div className="bg-gray-200 p-2 rounded-lg text-gray-900 font-semibold text-center">
@@ -187,6 +222,29 @@ export default function RoomPage() {
         </button>
       </div>
 
+      {/* ★アーティスト別 知ってる％（ルーム全体） */}
+      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
+        <h2 className="font-semibold text-gray-900">📊 ルーム全体：アーティスト別 知ってる％</h2>
+        {!catalog ? (
+          <div className="text-gray-700">読み込み中...</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {roomArtistStats.map((a) => (
+              <div
+                key={a.artist}
+                className="flex items-center justify-between rounded-lg px-2 py-2 bg-gray-50"
+              >
+                <div className="text-gray-900 font-semibold">{a.artist}</div>
+                <div className="text-gray-800">
+                  <span className="font-bold">{a.percent}%</span>{" "}
+                  <span className="text-gray-600">({a.known}/{a.total})</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* ユーザー曲 */}
       <div className="flex flex-col gap-4">
         {users.map((u) => (
@@ -202,7 +260,7 @@ export default function RoomPage() {
                     <span className="font-semibold">{s.name}</span>{" "}
                     <span className="text-gray-700">- {s.artist}</span>{" "}
                     <span className="text-purple-700 font-semibold">
-                      ({s.rating} / {ratingToPoint(s.rating)}pt)
+                      ({s.rating} / {s.rating === "A" ? "3" : s.rating === "B" ? "2" : "1"}pt)
                     </span>
                   </div>
                 </li>

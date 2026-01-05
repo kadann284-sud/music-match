@@ -56,7 +56,7 @@ export default function HomePage() {
   const [selectedSong, setSelectedSong] = useState<string>("");
   const [songSearch, setSongSearch] = useState<string>("");
 
-  // ★登録曲検索
+  // 登録曲検索
   const [mySongSearch, setMySongSearch] = useState<string>("");
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -113,7 +113,6 @@ export default function HomePage() {
     return base.filter((title) => normalizeForSearch(title).includes(q));
   }, [catalog, selectedArtist, songSearch]);
 
-  // 候補が変わったら選択を保つ/先頭へ
   useEffect(() => {
     if (filteredSongs.length === 0) {
       setSelectedSong("");
@@ -133,14 +132,13 @@ export default function HomePage() {
     setSelectedSong(filteredSongs[nextIdx]);
   }
 
-  // ★評価ボタンで追加（追加後は次へ）
   async function addSongWithRating(r: Rating) {
     if (!currentUser) return;
     if (!selectedArtist || !selectedSong) return;
 
     const key = normalizeSong(selectedSong, selectedArtist);
 
-    // 重複：追加せず次へ（快適性優先）
+    // 重複：追加せず次へ
     if (songs.some((s) => s.key === key)) {
       goNextSong();
       return;
@@ -153,7 +151,6 @@ export default function HomePage() {
     goNextSong();
   }
 
-  // パス（追加せず次へ）
   function passSong() {
     goNextSong();
   }
@@ -171,14 +168,32 @@ export default function HomePage() {
   const totalPoints = songs.reduce((sum, s) => sum + ratingToPoint(s.rating), 0);
   const rank = getRank(totalPoints);
 
-  // ★登録曲一覧の検索
+  // 登録曲一覧の検索
   const filteredMySongs = useMemo(() => {
     const q = normalizeForSearch(mySongSearch.trim());
     if (!q) return songs;
-    return songs.filter((s) =>
-      normalizeForSearch(`${s.name}_${s.artist}`).includes(q)
-    );
+    return songs.filter((s) => normalizeForSearch(`${s.name}_${s.artist}`).includes(q));
   }, [songs, mySongSearch]);
+
+  // ★アーティストごとの「知ってる％」
+  const artistStats = useMemo(() => {
+    if (!catalog) return [];
+
+    // 自分が登録している曲数（アーティスト別）
+    const mineCountByArtist = new Map<string, number>();
+    for (const s of songs) {
+      mineCountByArtist.set(s.artist, (mineCountByArtist.get(s.artist) ?? 0) + 1);
+    }
+
+    return catalog.artists
+      .map((a) => {
+        const total = a.songs.length;
+        const mine = mineCountByArtist.get(a.name) ?? 0;
+        const percent = total > 0 ? Math.round((mine / total) * 100) : 0;
+        return { artist: a.name, mine, total, percent };
+      })
+      .sort((x, y) => y.percent - x.percent);
+  }, [catalog, songs]);
 
   return (
     <main className="min-h-screen p-4 bg-gray-100 flex flex-col gap-6">
@@ -194,6 +209,29 @@ export default function HomePage() {
       <div className="bg-white p-3 rounded-lg shadow text-center text-gray-900">
         総ポイント: <span className="font-bold text-purple-700">{totalPoints}</span> | ランク:{" "}
         <span className="font-bold text-yellow-600">{rank}</span>
+      </div>
+
+      {/* ★アーティスト別「知ってる％」 */}
+      <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
+        <h2 className="font-semibold text-gray-900">📊 アーティスト別 知ってる％</h2>
+        {!catalog ? (
+          <div className="text-gray-700">読み込み中...</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {artistStats.map((a) => (
+              <div
+                key={a.artist}
+                className="flex items-center justify-between rounded-lg px-2 py-2 bg-gray-50"
+              >
+                <div className="text-gray-900 font-semibold">{a.artist}</div>
+                <div className="text-gray-800">
+                  <span className="font-bold">{a.percent}%</span>{" "}
+                  <span className="text-gray-600">({a.mine}/{a.total})</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 候補から追加：A/B/Cボタン + パス */}
@@ -237,13 +275,11 @@ export default function HomePage() {
                 ))}
               </select>
 
-              {/* ★追加ボタン廃止：A/B/C と パス */}
               <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={() => addSongWithRating("A")}
                   className="px-3 py-2 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700 transition disabled:opacity-50"
                   disabled={!selectedSong}
-                  title="よく知っている（3pt）"
                 >
                   A：よく知っている
                 </button>
@@ -251,7 +287,6 @@ export default function HomePage() {
                   onClick={() => addSongWithRating("B")}
                   className="px-3 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
                   disabled={!selectedSong}
-                  title="聞いたことがある（2pt）"
                 >
                   B：聞いたことがある
                 </button>
@@ -259,7 +294,6 @@ export default function HomePage() {
                   onClick={() => addSongWithRating("C")}
                   className="px-3 py-2 bg-blue-400 text-white rounded-lg shadow hover:bg-blue-500 transition disabled:opacity-50"
                   disabled={!selectedSong}
-                  title="うろ覚え（1pt）"
                 >
                   C：うろ覚え
                 </button>
@@ -283,7 +317,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* ★登録曲検索 */}
+      {/* 登録曲一覧（検索つき） */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
         <div className="flex flex-col md:flex-row gap-2 md:items-center">
           <h2 className="font-semibold text-gray-900">🎶 登録曲一覧</h2>
