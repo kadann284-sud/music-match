@@ -13,7 +13,6 @@ type Catalog = {
   artists: { name: string; songs: string[] }[];
 };
 
-// ランク判定
 function getRank(points: number) {
   if (points >= 1000) return "💎 ダイヤ";
   if (points >= 301) return "🏆 プラチナ";
@@ -22,7 +21,6 @@ function getRank(points: number) {
   return "🥉 ブロンズ";
 }
 
-// 評価→ポイント
 function ratingToPoint(rating: Rating) {
   switch (rating) {
     case "A":
@@ -41,7 +39,6 @@ function normalizeSong(name: string, artist: string) {
     .replace(/[\s\p{Punctuation}]/gu, "");
 }
 
-// 検索用：ゆらぎ吸収（簡易）
 function normalizeForSearch(s: string) {
   return s.toLowerCase().normalize("NFKC").replace(/[\s\p{Punctuation}]/gu, "");
 }
@@ -57,13 +54,10 @@ export default function HomePage() {
   const [selectedArtist, setSelectedArtist] = useState<string>("");
   const [selectedSong, setSelectedSong] = useState<string>("");
   const [rating, setRating] = useState<Rating>("A");
-
-  // ★追加：曲名検索
   const [songSearch, setSongSearch] = useState<string>("");
 
   const [userId, setUserId] = useState<string | null>(null);
 
-  // localStorage userId
   useEffect(() => {
     const id = localStorage.getItem("userId");
     if (!id) {
@@ -73,7 +67,6 @@ export default function HomePage() {
     setUserId(id);
   }, [router]);
 
-  // data.json 読み込み
   useEffect(() => {
     (async () => {
       const res = await fetch("/data.json", { cache: "no-store" });
@@ -87,10 +80,8 @@ export default function HomePage() {
     })();
   }, []);
 
-  // Firestore からユーザー取得
   useEffect(() => {
     if (!userId) return;
-
     const unsub = onSnapshot(doc(db, "users", userId), (snap) => {
       if (snap.exists()) {
         const data = snap.data() as any;
@@ -98,21 +89,16 @@ export default function HomePage() {
         setSongs(data.songs || []);
       }
     });
-
     return () => unsub();
   }, [userId]);
 
-  // アーティスト変更時：曲を先頭に
   useEffect(() => {
     if (!catalog) return;
     const a = catalog.artists.find((x) => x.name === selectedArtist);
     const first = a?.songs?.[0] ?? "";
     setSelectedSong(first);
-    // 検索もリセットしたいなら↓（好み）
-    // setSongSearch("");
   }, [selectedArtist, catalog]);
 
-  // アーティストの曲リスト（検索で絞る）
   const filteredSongs = useMemo(() => {
     if (!catalog) return [];
     const base = catalog.artists.find((a) => a.name === selectedArtist)?.songs ?? [];
@@ -121,35 +107,47 @@ export default function HomePage() {
     return base.filter((title) => normalizeForSearch(title).includes(q));
   }, [catalog, selectedArtist, songSearch]);
 
-  // 検索結果が変わったら「選択曲」を先頭に合わせる（候補0なら空）
   useEffect(() => {
     if (filteredSongs.length === 0) {
       setSelectedSong("");
       return;
     }
-    // 今選んでいる曲が候補に残っているなら維持、なければ先頭へ
     if (!selectedSong || !filteredSongs.includes(selectedSong)) {
       setSelectedSong(filteredSongs[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSongs]);
 
+  // ★追加：次の曲へ進む
+  function goNextSong() {
+    if (filteredSongs.length === 0) return;
+    const idx = filteredSongs.indexOf(selectedSong);
+    const nextIdx = idx >= 0 ? (idx + 1) % filteredSongs.length : 0;
+    setSelectedSong(filteredSongs[nextIdx]);
+  }
+
   async function addSong() {
     if (!currentUser) return;
     if (!selectedArtist || !selectedSong) return;
 
     const key = normalizeSong(selectedSong, selectedArtist);
-    if (songs.some((s) => s.key === key)) return;
+    if (songs.some((s) => s.key === key)) {
+      // すでに登録済みでも快適性優先で次へ
+      goNextSong();
+      return;
+    }
 
-    const newSong: Song = {
-      name: selectedSong,
-      artist: selectedArtist,
-      key,
-      rating,
-    };
-
+    const newSong: Song = { name: selectedSong, artist: selectedArtist, key, rating };
     const updated = { ...currentUser, songs: [...songs, newSong] };
     await setDoc(doc(db, "users", currentUser.id), updated);
+
+    // ★追加後は次へ
+    goNextSong();
+  }
+
+  // ★パス：追加せず次へ
+  function passSong() {
+    goNextSong();
   }
 
   async function deleteSong(songKey: string) {
@@ -181,7 +179,7 @@ export default function HomePage() {
         <span className="font-bold text-yellow-600">{rank}</span>
       </div>
 
-      {/* 追加：検索つき選択式 */}
+      {/* 検索つき選択式 + 追加/パス */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-3">
         <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式 / 検索）</h2>
 
@@ -204,7 +202,7 @@ export default function HomePage() {
 
               <input
                 className="flex-1 p-2 rounded-lg border text-gray-900"
-                placeholder="曲名で検索（例：レモン / Lemon）"
+                placeholder="曲名で検索"
                 value={songSearch}
                 onChange={(e) => setSongSearch(e.target.value)}
               />
@@ -232,13 +230,24 @@ export default function HomePage() {
                 <option value="C">C：名前だけ知ってる／うろ覚え（1pt）</option>
               </select>
 
-              <button
-                onClick={addSong}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
-                disabled={!selectedSong}
-              >
-                追加
-              </button>
+              {/* ★ボタン2つ：追加 / パス */}
+              <div className="flex gap-2">
+                <button
+                  onClick={addSong}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
+                  disabled={!selectedSong}
+                >
+                  追加
+                </button>
+                <button
+                  onClick={passSong}
+                  className="px-4 py-2 bg-gray-500 text-white rounded-lg shadow hover:bg-gray-600 transition disabled:opacity-50"
+                  disabled={!selectedSong}
+                  title="追加せず次へ"
+                >
+                  パス
+                </button>
+              </div>
             </div>
 
             {filteredSongs.length === 0 && (
@@ -250,7 +259,6 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* 曲リスト */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
         <h2 className="font-semibold text-gray-900">🎶 登録曲一覧</h2>
         <ul className="flex flex-col gap-1">

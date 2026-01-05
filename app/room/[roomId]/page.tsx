@@ -60,7 +60,7 @@ export default function RoomPage() {
   const [selectedSong, setSelectedSong] = useState<string>("");
   const [rating, setRating] = useState<Rating>("A");
 
-  // ★追加：曲名検索
+  // ★検索
   const [songSearch, setSongSearch] = useState<string>("");
 
   useEffect(() => {
@@ -95,7 +95,6 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  // room 参加
   useEffect(() => {
     if (!roomId || !userId) return;
 
@@ -119,7 +118,6 @@ export default function RoomPage() {
     })();
   }, [roomId, userId]);
 
-  // users リアルタイム取得
   useEffect(() => {
     if (roomMembers.length === 0) {
       setUsers([]);
@@ -147,16 +145,13 @@ export default function RoomPage() {
     [users, userId]
   );
 
-  // アーティスト変更時：曲選択を先頭に
   useEffect(() => {
     if (!catalog) return;
     const a = catalog.artists.find((x) => x.name === selectedArtist);
     const first = a?.songs?.[0] ?? "";
     setSelectedSong(first);
-    // setSongSearch(""); // リセットしたければON
   }, [selectedArtist, catalog]);
 
-  // 検索で絞り込んだ曲候補
   const filteredSongs = useMemo(() => {
     if (!catalog) return [];
     const base = catalog.artists.find((a) => a.name === selectedArtist)?.songs ?? [];
@@ -165,7 +160,6 @@ export default function RoomPage() {
     return base.filter((title) => normalizeForSearch(title).includes(q));
   }, [catalog, selectedArtist, songSearch]);
 
-  // 検索結果変化：選択曲を先頭に合わせる
   useEffect(() => {
     if (filteredSongs.length === 0) {
       setSelectedSong("");
@@ -177,16 +171,34 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSongs]);
 
+  // ★次の曲へ
+  function goNextSong() {
+    if (filteredSongs.length === 0) return;
+    const idx = filteredSongs.indexOf(selectedSong);
+    const nextIdx = idx >= 0 ? (idx + 1) % filteredSongs.length : 0;
+    setSelectedSong(filteredSongs[nextIdx]);
+  }
+
   async function addSong() {
     if (!currentUser) return;
     if (!selectedArtist || !selectedSong) return;
 
     const key = normalizeSong(selectedSong, selectedArtist);
-    if (currentUser.songs.some((s) => s.key === key)) return;
+    if (currentUser.songs.some((s) => s.key === key)) {
+      goNextSong();
+      return;
+    }
 
     const newSong: Song = { name: selectedSong, artist: selectedArtist, key, rating };
     const updated = { ...currentUser, songs: [...currentUser.songs, newSong] };
     await setDoc(doc(db, "users", currentUser.id), updated);
+
+    // ★追加後は次へ
+    goNextSong();
+  }
+
+  function passSong() {
+    goNextSong();
   }
 
   async function deleteSong(songKey: string) {
@@ -272,7 +284,7 @@ export default function RoomPage() {
         </button>
       </div>
 
-      {/* ★検索つき選択式 */}
+      {/* 検索つき選択式 + 追加/パス */}
       <div className="bg-white p-3 rounded-lg shadow flex flex-col gap-3">
         <h2 className="font-semibold text-gray-900">➕ 曲を追加（選択式 / 検索）</h2>
 
@@ -295,7 +307,7 @@ export default function RoomPage() {
 
               <input
                 className="flex-1 p-2 rounded-lg border text-gray-900"
-                placeholder="曲名で検索（例：レモン / Lemon）"
+                placeholder="曲名で検索"
                 value={songSearch}
                 onChange={(e) => setSongSearch(e.target.value)}
               />
@@ -323,13 +335,24 @@ export default function RoomPage() {
                 <option value="C">C：名前だけ知ってる／うろ覚え（1pt）</option>
               </select>
 
-              <button
-                onClick={addSong}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
-                disabled={!selectedSong}
-              >
-                追加
-              </button>
+              {/* ★ボタン2つ：追加 / パス */}
+              <div className="flex gap-2">
+                <button
+                  onClick={addSong}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition disabled:opacity-50"
+                  disabled={!selectedSong}
+                >
+                  追加
+                </button>
+                <button
+                  onClick={passSong}
+                  className="px-4 py-2 bg-gray-500 text-white rounded-lg shadow hover:bg-gray-600 transition disabled:opacity-50"
+                  disabled={!selectedSong}
+                  title="追加せず次へ"
+                >
+                  パス
+                </button>
+              </div>
             </div>
 
             {filteredSongs.length === 0 && (
@@ -341,7 +364,7 @@ export default function RoomPage() {
         )}
       </div>
 
-      {/* ユーザーごとの曲リスト（アーティスト表示） */}
+      {/* ユーザー曲 */}
       <div className="flex flex-col gap-4">
         {users.map((u) => (
           <div key={u.id} className="bg-white p-3 rounded-lg shadow flex flex-col gap-2">
@@ -376,7 +399,7 @@ export default function RoomPage() {
         ))}
       </div>
 
-      {/* 共通曲（アーティストも表示） */}
+      {/* 共通曲 */}
       <div className="bg-white p-3 rounded-lg shadow mt-2">
         <h2 className="font-semibold text-lg text-gray-900 mb-2">🎯 共通曲</h2>
 
