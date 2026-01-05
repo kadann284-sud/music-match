@@ -1,0 +1,16 @@
+{
+  "artists": [
+    {
+      "name": "YOASOBI",
+      "songs": ["アイドル", "夜に駆ける", "群青"]
+    },
+    {
+      "name": "Official髭男dism",
+      "songs": ["Pretender", "115万キロのフィルム", "宿命"]
+    },
+    {
+      "name": "米津玄師",
+      "songs": ["Lemon", "KICK BACK", "ピースサイン"]
+    }
+  ]
+}
